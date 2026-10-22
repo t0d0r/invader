@@ -10,7 +10,7 @@ Usage:
   python3 invader.py --delay 0.01    # faster
   python3 invader.py --no-anim       # just print the finished grid
   python3 invader.py --export plan.csv   # date,level,commits for each day
-  python3 invader.py --commit .          # plant backdated empty commits in a repo
+  python3 invader.py --commit .          # top up backdated empty commits in a repo
 """
 from __future__ import annotations
 
@@ -65,6 +65,10 @@ FRAMES = [
 ]
 FRAME_WIDTH = 11  # weeks per frame
 FRAME_GAP = 1    # empty weeks between frames
+# The pattern is anchored to this Sunday, so every calendar date has a fixed
+# cell for good. Invaders march one column left each week as the grid moves.
+PATTERN_EPOCH = dt.date(2025, 10, 19)
+COMMIT_MARKER = "Contribution grid cell"
 
 # Vocabulary for generated commit subjects (Conventional Commits style).
 COMMIT_TYPES = ["feat", "fix", "refactor", "docs", "test", "chore", "perf", "style"]
@@ -87,20 +91,15 @@ def paint(text: str, hex_color: str, reverse: bool = False) -> str:
     return f"{prefix}\x1b[38;2;{r};{g};{b}m{text}\x1b[0m"
 
 
-def build_pattern(frames: list[list[str]], gap: int) -> dict[tuple[int, int], int]:
-    """Tile frames left to right; return {(week, day): level}."""
-    pattern: dict[tuple[int, int], int] = {}
-    col, i = 0, 0
-    while col < WEEKS:
-        frame = frames[i % len(frames)]
-        for day, row in enumerate(frame):
-            for c, ch in enumerate(row):
-                level = CHAR_LEVEL[ch]
-                if level and col + c < WEEKS:
-                    pattern[(col + c, day)] = level
-        col += FRAME_WIDTH + gap
-        i += 1
-    return pattern
+def cell_level(date: dt.date) -> int:
+    """Contribution level for a calendar date, from the tiled frames."""
+    weeks = (date - PATTERN_EPOCH).days // 7
+    period = FRAME_WIDTH + FRAME_GAP
+    col = weeks % period
+    if col >= FRAME_WIDTH:
+        return 0
+    frame = FRAMES[(weeks // period) % len(FRAMES)]
+    return CHAR_LEVEL[frame[day_row(date)][col]]
 
 
 def day_row(d: dt.date) -> int:
@@ -151,21 +150,38 @@ def render(filled: dict[tuple[int, int], int], start: dt.date, palette: list[str
 def commit_message(rng: random.Random, date: dt.date, level: int, n: int, of: int) -> str:
     subject = (f"{rng.choice(COMMIT_TYPES)}({rng.choice(COMMIT_SCOPES)}): "
                f"{rng.choice(COMMIT_VERBS)} {rng.choice(COMMIT_OBJECTS)}")
-    body = f"Contribution grid cell {date.isoformat()} level {level}, commit {n}/{of}."
+    body = f"{COMMIT_MARKER} {date.isoformat()} level {level}, commit {n}/{of}."
     return f"{subject}\n\n{body}"
 
 
+def last_planted(repo: str) -> dt.date | None:
+    """Newest author date among commits this tool created in `repo`."""
+    out = subprocess.run(["git", "-C", repo, "log", f"--grep={COMMIT_MARKER}",
+                          "--format=%ad", "--date=short"],
+                         capture_output=True, text=True, check=True).stdout.split()
+    return max(map(dt.date.fromisoformat, out)) if out else None
+
+
 def plant_commits(schedule: list[tuple[dt.date, int]], repo: str) -> int:
-    """Create backdated empty commits in `repo`, COMMITS_PER_LEVEL per day."""
+    """Create backdated empty commits in `repo`, COMMITS_PER_LEVEL per day.
+
+    Only days after the newest planted commit are processed, so re-running
+    the command tops the history up to the end of `schedule`.
+    """
     git = ["git", "-C", repo]
     subprocess.run(git + ["rev-parse", "--is-inside-work-tree"], check=True,
                    stdout=subprocess.DEVNULL)
     if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode:
         sys.exit("error: index has staged changes; commit or unstage them first")
-    rng = random.Random(0)
+    done = last_planted(repo)
+    todo = [(d, lvl) for d, lvl in schedule if done is None or d > done]
+    if not todo:
+        print(f"nothing to do: planted through {done}", file=sys.stderr)
+        return 0
+    rng = random.Random(todo[0][0].toordinal())
     tz = dt.datetime.now().astimezone().tzinfo
     made = 0
-    for date, level in schedule:
+    for date, level in todo:
         count = COMMITS_PER_LEVEL[level]
         for n in range(count):
             when = dt.datetime.combine(date, dt.time(12, 0), tz) + dt.timedelta(minutes=7 * n)
@@ -175,7 +191,8 @@ def plant_commits(schedule: list[tuple[dt.date, int]], repo: str) -> int:
                                   commit_message(rng, date, level, n + 1, count)],
                            env=env, check=True)
             made += 1
-    print(f"created {made} commits in {repo}", file=sys.stderr)
+    print(f"created {made} commits for {todo[0][0]}..{todo[-1][0]} in {repo}",
+          file=sys.stderr)
     return made
 
 
@@ -192,7 +209,6 @@ def main() -> int:
     args = ap.parse_args()
 
     palette = THEMES[args.theme]
-    pattern = build_pattern(FRAMES, FRAME_GAP)
     start, total_days = grid_dates(args.end)
     cols = shutil.get_terminal_size((80, 24)).columns
     cell = "██" if cols >= 4 + WEEKS * 2 else "■"
@@ -200,7 +216,7 @@ def main() -> int:
     schedule = []
     for i in range(total_days):
         date = start + dt.timedelta(days=i)
-        level = pattern.get((i // 7, day_row(date)), 0)
+        level = cell_level(date)
         schedule.append((date, level))
     contributions = sum(COMMITS_PER_LEVEL[lvl] for _, lvl in schedule)
 

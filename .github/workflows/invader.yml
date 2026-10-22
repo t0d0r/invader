@@ -1,0 +1,29 @@
+name: invader
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # daily at 10:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: invader
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # --commit scans history for the last planted day
+
+      - name: Configure git author
+        run: |
+          git config user.name  "Todor Dragnev"
+          git config user.email "todor@linuxfan.org"
+
+      - name: Top up and push today's commits
+        run: make update

@@ -10,7 +10,8 @@ python3 invader.py --theme light --delay 0.01
 python3 invader.py --no-anim         # print the finished grid only
 python3 invader.py --export plan.csv # date,level,commits for every day
 python3 invader.py --end 2027-01-31  # simulate a grid ending on another date
-python3 invader.py --commit .        # plant backdated empty commits in a repo
+python3 invader.py --commit .        # top up backdated empty commits in a repo
+make                                 # list Makefile targets
 ```
 
 ## How it works
@@ -28,11 +29,25 @@ python3 invader.py --commit .        # plant backdated empty commits in a repo
 - `--export` writes a CSV with an approximate commit count per day
   (`COMMITS_PER_LEVEL`). GitHub assigns levels by quartiles of your real
   activity, so the exact counts needed may differ.
+- The pattern is anchored to `PATTERN_EPOCH` (a Sunday), not to the grid
+  start, so every calendar date has a fixed cell forever. Invaders march one
+  column to the left each week and new ones appear on the right.
 - `--commit REPO` creates that many empty commits per day in `REPO`, with the
   author and committer dates set to the simulated day and generated
   Conventional Commit subjects. Each commit body records the grid cell it
-  fills. Push the branch and, for a private repo, enable "Include private
-  contributions" in your GitHub profile settings for them to show.
+  fills. Re-running only adds days after the newest planted commit, so it is
+  safe to call daily. Push the branch and, for a private repo, enable
+  "Include private contributions" in your GitHub profile settings.
+
+## Keeping it going
+
+`make update` runs `--commit .` and pushes `main`. The workflow in
+`.github/workflows/invader.yml` does that every day at 10:00 UTC, authoring
+commits with the configured name and email so they count on the profile.
+Trigger it by hand from the Actions tab with "Run workflow".
+
+GitHub counts at most about 1000 commits per push, so if you ever plant a
+long stretch at once, push it in batches.
 
 🔒 Security Note: without `--commit` the script only reads the clock and writes
 to stdout or the file you name with `--export`. `--commit` runs `git commit`
