@@ -10,6 +10,7 @@ python3 invader.py --theme light --delay 0.01
 python3 invader.py --no-anim         # print the finished grid only
 python3 invader.py --export plan.csv # date,level,commits for every day
 python3 invader.py --end 2027-01-31  # simulate a grid ending on another date
+python3 invader.py --commit .        # plant backdated empty commits in a repo
 ```
 
 ## How it works
@@ -27,8 +28,14 @@ python3 invader.py --end 2027-01-31  # simulate a grid ending on another date
 - `--export` writes a CSV with an approximate commit count per day
   (`COMMITS_PER_LEVEL`). GitHub assigns levels by quartiles of your real
   activity, so the exact counts needed may differ.
+- `--commit REPO` creates that many empty commits per day in `REPO`, with the
+  author and committer dates set to the simulated day and generated
+  Conventional Commit subjects. Each commit body records the grid cell it
+  fills. Push the branch and, for a private repo, enable "Include private
+  contributions" in your GitHub profile settings for them to show.
 
-🔒 Security Note: the script only reads the clock and writes to stdout or the
-file you name with `--export`. If you later turn the CSV into real commits,
-use a dedicated throwaway repository and a non-privileged token, and keep in
-mind that backdated commits are visible in git history and can be spotted.
+🔒 Security Note: without `--commit` the script only reads the clock and writes
+to stdout or the file you name with `--export`. `--commit` runs `git commit`
+in the repository you point it at and refuses to run with staged changes, but
+still use it only in a dedicated throwaway repository with a non-privileged
+token. Backdated commits are visible in git history and can be spotted.

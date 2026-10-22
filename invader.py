@@ -10,13 +10,17 @@ Usage:
   python3 invader.py --delay 0.01    # faster
   python3 invader.py --no-anim       # just print the finished grid
   python3 invader.py --export plan.csv   # date,level,commits for each day
+  python3 invader.py --commit .          # plant backdated empty commits in a repo
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import datetime as dt
+import os
+import random
 import shutil
+import subprocess
 import sys
 import time
 
@@ -61,6 +65,15 @@ FRAMES = [
 ]
 FRAME_WIDTH = 11  # weeks per frame
 FRAME_GAP = 1    # empty weeks between frames
+
+# Vocabulary for generated commit subjects (Conventional Commits style).
+COMMIT_TYPES = ["feat", "fix", "refactor", "docs", "test", "chore", "perf", "style"]
+COMMIT_SCOPES = ["grid", "render", "cli", "pattern", "export", "theme", "frames", "dates"]
+COMMIT_VERBS = ["tweak", "adjust", "clean up", "simplify", "update", "polish",
+                "rework", "tidy", "improve", "align", "trim", "extend"]
+COMMIT_OBJECTS = ["month header", "palette lookup", "frame tiling", "row labels",
+                  "cursor highlight", "csv writer", "argument parsing", "legend",
+                  "week math", "cell sizing", "docstring", "type hints"]
 
 
 def rgb(hex_color: str) -> tuple[int, int, int]:
@@ -135,6 +148,37 @@ def render(filled: dict[tuple[int, int], int], start: dt.date, palette: list[str
     return "\n".join(lines)
 
 
+def commit_message(rng: random.Random, date: dt.date, level: int, n: int, of: int) -> str:
+    subject = (f"{rng.choice(COMMIT_TYPES)}({rng.choice(COMMIT_SCOPES)}): "
+               f"{rng.choice(COMMIT_VERBS)} {rng.choice(COMMIT_OBJECTS)}")
+    body = f"Contribution grid cell {date.isoformat()} level {level}, commit {n}/{of}."
+    return f"{subject}\n\n{body}"
+
+
+def plant_commits(schedule: list[tuple[dt.date, int]], repo: str) -> int:
+    """Create backdated empty commits in `repo`, COMMITS_PER_LEVEL per day."""
+    git = ["git", "-C", repo]
+    subprocess.run(git + ["rev-parse", "--is-inside-work-tree"], check=True,
+                   stdout=subprocess.DEVNULL)
+    if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode:
+        sys.exit("error: index has staged changes; commit or unstage them first")
+    rng = random.Random(0)
+    tz = dt.datetime.now().astimezone().tzinfo
+    made = 0
+    for date, level in schedule:
+        count = COMMITS_PER_LEVEL[level]
+        for n in range(count):
+            when = dt.datetime.combine(date, dt.time(12, 0), tz) + dt.timedelta(minutes=7 * n)
+            stamp = when.isoformat()
+            env = {**os.environ, "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
+            subprocess.run(git + ["commit", "-q", "--allow-empty", "-m",
+                                  commit_message(rng, date, level, n + 1, count)],
+                           env=env, check=True)
+            made += 1
+    print(f"created {made} commits in {repo}", file=sys.stderr)
+    return made
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--end", type=dt.date.fromisoformat, default=dt.date.today(),
@@ -143,6 +187,8 @@ def main() -> int:
     ap.add_argument("--theme", choices=THEMES, default="dark")
     ap.add_argument("--no-anim", action="store_true", help="print final grid only")
     ap.add_argument("--export", metavar="FILE", help="write date,level,commits CSV")
+    ap.add_argument("--commit", metavar="REPO",
+                    help="create backdated empty commits in REPO instead of animating")
     args = ap.parse_args()
 
     palette = THEMES[args.theme]
@@ -165,6 +211,10 @@ def main() -> int:
             for date, level in schedule:
                 w.writerow([date.isoformat(), level, COMMITS_PER_LEVEL[level]])
         print(f"wrote {len(schedule)} days to {args.export}", file=sys.stderr)
+
+    if args.commit:
+        plant_commits(schedule, args.commit)
+        return 0
 
     filled: dict[tuple[int, int], int] = {}
     hide, show, home, clear = "\x1b[?25l", "\x1b[?25h", "\x1b[H", "\x1b[2J"
